@@ -2,27 +2,31 @@ use bevy::{
     prelude::{Deref},
     app::{App, Plugin},
     asset::{ Assets, AssetEvent, AssetResult, AssetServer,Handle},
-    core_pipeline::core_3d::Camera3dBundle,
+    core_pipeline::core_3d::{Camera3d,Camera3dBundle},
     DefaultPlugins,
-    ecs::{world::{FromWorld, World}, system::{Commands, Res, ResMut}},
+    ecs::{query::{With, QueryState},world::{FromWorld, World}, system::{Commands, Res, ResMut}},
     math::{Mat4, Vec3},
     render::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
-        camera::{Camera},
+        camera::{Camera, ExtractedCamera},
+
         renderer::{RenderDevice,RenderContext},
         render_asset::RenderAssets,
-        render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext},
+        render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext,SlotInfo, SlotType},
+        render_phase::{TrackedRenderPass},
         render_resource::{
             BlendState,BindGroup, BindGroupLayout, BindGroupLayoutEntry,BindGroupLayoutDescriptor, BindingType,
             CachedRenderPipelineId, ColorWrites, ColorTargetState, Face,
             FragmentState, MultisampleState, PipelineCache,PipelineLayoutDescriptor,
             PrimitiveState, PrimitiveTopology, RenderPipeline, RenderPipelineDescriptor,
+            RenderPassDescriptor,
             Shader, ShaderModuleDescriptor, ShaderStages, SamplerBindingType,
             TextureFormat, TextureSampleType, TextureViewDimension,VertexAttribute,
             VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
         },
         texture::{BevyDefault, TextureCache, Image},
-        RenderApp,RenderStage
+        RenderApp,RenderStage,
+        view::{ExtractedView, ViewTarget},
     },
     transform::components::Transform,
 };
@@ -185,11 +189,29 @@ fn queue_bind_group(
 ) {
     
 }
-pub struct RaycastNode{
+pub struct RaycastNode {
+    query: QueryState<
+        (
+            &'static ExtractedCamera,
+            &'static ExtractedView,
+        ),
+        With<ExtractedView>,
+    >,
 }
+impl RaycastNode {
+    // I suppose this selects all entities with ExtractedView component, but what does that mean?
+    pub const IN_VIEW: &'static str = "view";
 
+    pub fn new(world: &mut World) -> Self {
+        Self {
+            query: world.query_filtered(),
+        }
+    }
+}
 impl Node for RaycastNode{
-
+    fn input(&self) -> Vec<SlotInfo> {
+        vec![SlotInfo::new(RaycastNode::IN_VIEW, SlotType::Entity)]
+    }
     fn update(&mut self, _world: &mut World) {
         let pipeline = _world.resource::<RaycastPipeline>();
     }
@@ -200,9 +222,63 @@ impl Node for RaycastNode{
         render_context: &mut RenderContext,
         world: &World,
     ) -> Result<(), NodeRunError> {
+        let view_entity = graph.get_input_entity(Self::IN_VIEW)?;
+        let (camera,target) =
+            match self.query.get_manual(world, view_entity) {
+                Ok(query) => query,
+                Err(_) => {
+                    return Ok(());
+                } // No window
+            };
+        let mut render_pass = render_context
+        .command_encoder
+        .begin_render_pass(&RenderPassDescriptor::default());
+        let mut tracked_pass = TrackedRenderPass::new(render_pass);
+        if let Some(viewport) = camera.viewport.as_ref() {
+            tracked_pass.set_camera_viewport(viewport);
+        }
+        // render_pass.set_bind_group(0,);
+        // render_pass.set_bind_group(2, &volume_texture, &[]);
+        // rpass.draw(0..self.vertex_count as _, 0..1);
         Ok(())
     }
 }
 
+//  How do I integrate this code into the Node Graph workflow?
+//  I know this syntax is also used in EntityRenderCommand, and it's used in 
+//  animate_shader.rs https://github.com/bevyengine/bevy/blob/992681b59b93be3efd52ad8d5a34ebb4ddfd0c20/examples/shader/animate_shader.rs#L256
+// Do i set the bind group for the volumetexture inside of the run function or inside of an implementation
+// of EntityRenderCommand that I call within my Plugin function along with other bind group settings and my pipeline
+// as in impl<const I: usize> EntityRenderCommand for SetTimeBindGroup<I> {} 
+//
+// type DrawCustom = (
+//     SetItemPipeline,
+//     SetMeshViewBindGroup<0>,
+//     SetMeshBindGroup<1>,
+//     SetTimeBindGroup<2>,
+//     DrawMesh,
+// );                           
+//         app.sub_app_mut(RenderApp)
+// .add_render_command::<Transparent3d, DrawCustom>()
+// from https://github.com/pudnax/vokselis/blob/dff08090f23322631ea60fe13d5dd3789f926577/examples/bonsai/raycast.rs#L117
+// impl<'a> RaycastPipeline {
+//     pub fn record<'pass>(
+//         &'a self,
+//         rpass: &mut wgpu::RenderPass<'pass>,
+//         uniform_bind_group: &'a GlobalUniformBinding,
+//         camera_bind_group: &'a CameraBinding,
+//         volume_texture: &'a wgpu::BindGroup,
+//     ) where
+//         'a: 'pass,
+//     {
+//         rpass.set_pipeline(&self.pipeline);
+//         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+//         rpass.set_bind_group(0, &uniform_bind_group.binding, &[]);
+//         rpass.set_bind_group(1, &camera_bind_group.bind_group, &[]);
+//         rpass.set_bind_group(2, &volume_texture, &[]);
+//         rpass.draw(0..self.vertex_count as _, 0..1);
+//     }
+// }
 
 
