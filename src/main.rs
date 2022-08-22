@@ -244,22 +244,7 @@ impl Node for RaycastNode{
     }
 }
 
-//  How do I integrate this code into the Node Graph workflow?
-//  I know this syntax is also used in EntityRenderCommand, and it's used in 
-//  animate_shader.rs https://github.com/bevyengine/bevy/blob/992681b59b93be3efd52ad8d5a34ebb4ddfd0c20/examples/shader/animate_shader.rs#L256
-// Do i set the bind group for the volumetexture inside of the run function or inside of an implementation
-// of EntityRenderCommand that I call within my Plugin function along with other bind group settings and my pipeline
-// as in impl<const I: usize> EntityRenderCommand for SetTimeBindGroup<I> {} 
-//
-// type DrawCustom = (
-//     SetItemPipeline,
-//     SetMeshViewBindGroup<0>,
-//     SetMeshBindGroup<1>,
-//     SetTimeBindGroup<2>,
-//     DrawMesh,
-// );                           
-//         app.sub_app_mut(RenderApp)
-// .add_render_command::<Transparent3d, DrawCustom>()
+
 // from https://github.com/pudnax/vokselis/blob/dff08090f23322631ea60fe13d5dd3789f926577/examples/bonsai/raycast.rs#L117
 // impl<'a> RaycastPipeline {
 //     pub fn record<'pass>(
@@ -281,4 +266,20 @@ impl Node for RaycastNode{
 //     }
 // }
 
-
+//  How do I integrate the code above into the Node Graph workflow?
+//  I know this syntax is also used in EntityRenderCommand ex: 
+//  animate_shader.rs https://github.com/bevyengine/bevy/blob/992681b59b93be3efd52ad8d5a34ebb4ddfd0c20/examples/shader/animate_shader.rs#L256
+// Do I set the bind group for the volumetexture inside the run function of the Node or inside an implementation
+// of EntityRenderCommand that I call within my Plugin  along with other bind group settings and my pipeline
+// as in impl<const I: usize> EntityRenderCommand for SetTimeBindGroup<I> {} 
+// ====>
+// type DrawCustom = (
+//     SetItemPipeline,
+//     SetMeshViewBindGroup<0>,
+//     SetMeshBindGroup<1>,
+//     SetTimeBindGroup<2>,
+//     DrawMesh,
+// );    
+// ====>                       
+//         app.sub_app_mut(RenderApp)
+// .add_render_command::<Transparent3d, DrawCustom>()
