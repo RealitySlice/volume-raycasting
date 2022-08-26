@@ -3,7 +3,8 @@ use bevy::{
     app::{App, Plugin},
     
     asset::{Assets, AssetEvent, AssetResult, AssetServer,Handle, HandleUntyped,},
-    core_pipeline::core_3d::{Camera3dCamera3dBundle},
+    core::cast_slice,
+    core_pipeline::core_3d::{Camera3d, Camera3dBundle},
     DefaultPlugins,
     diagnostic::{FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin},
     ecs::{
@@ -14,14 +15,15 @@ use bevy::{
     render::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         camera::{Camera, ExtractedCamera, CameraDriverNode},
-
+        Extract,
         renderer::{RenderDevice, RenderContext, RenderQueue},
         render_asset::RenderAssets,
         render_graph::{Node, NodeRunError, RenderGraph, RenderGraphContext,SlotInfo, SlotType},
-        render_phase::{EntityRenderCommand, PhaseItem, TrackedRenderPass, RenderCommand, RenderCommandResult},
+        render_phase::{DrawFunctions, DrawFunctionId, EntityRenderCommand, PhaseItem, RenderCommand, TrackedRenderPass, RenderCommandResult, RenderPhase,},
         render_resource::{
-            BlendState,BindGroup, BindGroupLayout, BindGroupLayoutEntry,BindGroupLayoutDescriptor, BindingType,
-            Buffer, BufferInitDescriptor, CachedRenderPipelineId, ColorWrites, 
+            BlendState,BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutEntry,
+            BindingResource, BindGroupLayoutDescriptor, BindingType,
+            Buffer, BufferUsages, BufferInitDescriptor, CachedRenderPipelineId, ColorWrites, 
             ColorTargetState, Extent3d, Face,
             FragmentState, IndexFormat, MultisampleState, PipelineCache,PipelineLayoutDescriptor,
             PrimitiveState, PrimitiveTopology, RenderPipeline, 
@@ -32,7 +34,7 @@ use bevy::{
         },
         texture::{BevyDefault, TextureCache, Image,},
         RenderApp,RenderStage,
-        view::{ExtractedView, ViewTarget},
+        view::{ExtractedView, ViewTarget, ViewUniform, ViewUniformOffset, ViewUniforms},
     },
     transform::components::Transform,
     window::WindowDescriptor,
@@ -174,7 +176,6 @@ impl FromWorld for RaycastPipeline{
 
         let mut pipeline_cache = world.resource_mut::<PipelineCache>();
 
-        //TODO: figure out how to use the pipeline
         let pipeline_id = pipeline_cache.queue_render_pipeline(RenderPipelineDescriptor {
             vertex: VertexState {
                 shader: RAYCAST_SHADER_HANDLE.typed(),
@@ -219,13 +220,88 @@ impl FromWorld for RaycastPipeline{
         }
     }
 }
-fn extract_raycast(mut commands: Commands, mut cubes: Query<(Entity)>) {
 
+pub fn extract_raycast(
+    mut commands: Commands,
+    cameras_3d: Extract<Query<(Entity, &Camera), With<Camera3d>>>,
+) {
+    for (entity, camera) in cameras_3d.iter() {
+        if camera.is_active {
+            commands
+                .get_or_spawn(entity)
+                .insert(RenderPhase::<RaycastPhaseItem>::default());
+        }
+    }
 }
+
 fn prepare_raycast(
     render_device: Res<RenderDevice>,
     render_queue: Res<RenderQueue>,
+    mut gpu_mesh: ResMut<GpuMesh>
 ) {
+    let vertices = [
+        1., 1., 0., 0., 1., 0., 1., 1., 1., 0., 1., 1., 0., 0., 1., 0., 1., 0., 0., 0., 0., 1.,
+        1., 0., 1., 0., 0., 1., 1., 1., 1., 0., 1., 0., 0., 1., 1., 0., 0., 0., 0., 0.,
+    ];
+    let vertex_buffer = render_device.create_buffer_with_data(&BufferInitDescriptor{
+        label: Some("Volume Vertex Buffer"),
+        contents: cast_slice::<f32, _>(&vertices),
+        usage: BufferUsages::VERTEX,
+    });
+    let vertex_count = vertices.len() / 3;
+    gpu_mesh.buffer.write_buffer(&render_device, &render_queue);
+}
+fn prepare_view_uniforms(
+    mut commands: Commands,
+    render_device: Res<RenderDevice>,
+    render_queue: Res<RenderQueue>,
+    mut view_uniforms: ResMut<ViewUniforms>,
+    views: Query<(Entity, &ExtractedView)>,
+) {
+    view_uniforms.uniforms.clear();
+    for (entity, camera) in &views {
+        let projection = camera.projection;
+        let inverse_projection = projection.inverse();
+        let view = camera.transform.compute_matrix();
+        let inverse_view = view.inverse();
+        let view_uniforms = ViewUniformOffset {
+            offset: view_uniforms.uniforms.push(ViewUniform {
+                view_proj: projection * inverse_view,
+                inverse_view_proj: view * inverse_projection,
+                view,
+                inverse_view,
+                projection,
+                inverse_projection,
+                world_position: camera.transform.translation(),
+                width: camera.width as f32,
+                height: camera.height as f32,
+            }),
+        };
+
+        commands.entity(entity).insert(view_uniforms);
+    }
+
+    view_uniforms
+        .uniforms
+        .write_buffer(&render_device, &render_queue);
+}
+
+pub struct RaycastPhaseItem {
+    pub draw_function: DrawFunctionId,
+}
+
+impl PhaseItem for RaycastPhaseItem {
+    type SortKey = u32;
+
+    #[inline]
+    fn sort_key(&self) -> Self::SortKey {
+        0
+    }
+
+    #[inline]
+    fn draw_function(&self) -> DrawFunctionId {
+        self.draw_function
+    }
 }
 struct RaycastVolumeTextureBindGroup(BindGroup);
 
@@ -251,26 +327,32 @@ fn queue_raycast_volume_texture_bind_group(
     raycast_volume_texture: Res<VolumeTexture>,
     render_device: Res<RenderDevice>,
 ) {
+    let view = ;
+    let bind_group = render_device.create_bind_group(&BindGroupDescriptor {
+        label: None,
+        layout: &raycast_pipeline.texture_bind_group_layout,
+        entries: &[BindGroupEntry {
+            binding: 0,
+            resource: BindingResource::TextureView(&view.texture_view),
+        }],
+    });
+    commands.insert_resource(VolumeTextureBindGroup(bind_group));
+    //.write_buffer(&render_device, &render_queue);
 }
 
-fn prepare_volume(
-    mut commands: Commands,
-    render_device: Res<RenderDevice>,
-    render_queue: Res<RenderQueue>,
-) {
-
-}
 pub struct RaycastNode {
     query: QueryState<
         (
+            &'static RenderPhase<RaycastPhaseItem>,
             &'static ExtractedCamera,
             &'static ExtractedView,
+            &'static Camera3d,
         ),
         With<ExtractedView>,
     >,
 }
 impl RaycastNode {
-    pub const RAYCAST_NODE: &'static str = "raycast_node";
+    pub const IN_VIEW: &'static str = "view";
 
     pub fn new(world: &mut World) -> Self {
         Self {
@@ -278,9 +360,10 @@ impl RaycastNode {
         }
     }
 }
+
 impl Node for RaycastNode{
     fn input(&self) -> Vec<SlotInfo> {
-        vec![SlotInfo::new(CameraDriverNode::IN_VIEW, SlotType::Entity)]
+        vec![SlotInfo::new(RaycastNode::IN_VIEW, SlotType::Entity)]
     }
     fn update(&mut self, _world: &mut World) {
         let pipeline = _world.resource::<RaycastPipeline>();
@@ -293,16 +376,20 @@ impl Node for RaycastNode{
         world: &World,
     ) -> Result<(), NodeRunError> {
         let view_entity = graph.get_input_entity(Self::IN_VIEW)?;
-        let (camera,target) =
+        let (raycast_phase_item, camera, view, camera_3d) =
             match self.query.get_manual(world, view_entity) {
                 Ok(query) => query,
                 Err(_) => {
                     return Ok(());
                 } // No window
             };
+
+        let draw_functions = world.resource::<DrawFunctions<RaycastPhaseItem>>();
+
         let mut render_pass = render_context
         .command_encoder
         .begin_render_pass(&RenderPassDescriptor::default());
+        let mut draw_functions = draw_functions.write();
         let mut tracked_pass = TrackedRenderPass::new(render_pass);
         if let Some(viewport) = camera.viewport.as_ref() {
             tracked_pass.set_camera_viewport(viewport);
@@ -313,6 +400,8 @@ impl Node for RaycastNode{
         Ok(())
     }
 }
+
+// TODO: check compatibility with raycastpipeline definition
 pub struct SetRaycastPipeline;
 
 impl<P: PhaseItem> RenderCommand<P> for SetRaycastPipeline {
@@ -336,27 +425,9 @@ impl<P: PhaseItem> RenderCommand<P> for SetRaycastPipeline {
         }
     }
 }
-
+// TODO: check correctness
 struct SetRaycastBindGroup<const I: usize>;
 impl<const I: usize, P: PhaseItem> RenderCommand<P> for SetRaycastBindGroup<I> {
-    type Param = SRes<GpuMesh>;
-
-    #[inline]
-    fn render<'w>(
-        _view: Entity,
-        _item: &P,
-        gpu_quads: SystemParamItem<'w, '_, Self::Param>,
-        pass: &mut TrackedRenderPass<'w>,
-    ) -> RenderCommandResult {
-        let gpu_quads = gpu_quads.into_inner();
-        pass.set_bind_group(I, gpu_quads.bind_group.as_ref().unwrap(), &[]);
-
-        RenderCommandResult::Success
-    }
-}
-
-struct SetRaycastViewBindGroup<const I: usize>;
-impl<const I: usize, P: PhaseItem> RenderCommand<P> for SetRaycastViewBindGroup<I> {
     type Param = SRes<GpuMesh>;
 
     #[inline]
@@ -373,34 +444,18 @@ impl<const I: usize, P: PhaseItem> RenderCommand<P> for SetRaycastViewBindGroup<
     }
 }
 
-/// The GPU-representation of a [`Mesh`].
-/// Consists of a vertex data buffer and an optional index data buffer.
+// TODO: check correctness
 #[derive(Debug, Clone)]
 pub struct GpuMesh {
     /// Contains all attribute data for each vertex.
-    pub vertex_buffer: Buffer,
-    pub buffer_info: GpuBufferInfo,
-    pub primitive_topology: PrimitiveTopology,
-    pub layout: MeshVertexBufferLayout,
-}
-
-pub struct Mesh {
+    vertex_buffer: Buffer,
+    vertex_count: u32,
     primitive_topology: PrimitiveTopology,
+    layout: VertexBufferLayout,
+    bind_group: Option<BindGroup>,
 }
 
-/// The index/vertex buffer info of a [`GpuMesh`].
-#[derive(Debug, Clone)]
-pub enum GpuBufferInfo {
-    Indexed {
-        /// Contains all index data of a mesh.
-        buffer: Buffer,
-        count: u32,
-        index_format: IndexFormat,
-    },
-    NonIndexed {
-        vertex_count: u32,
-    },
-}
+// TODO: VERIFY CORRECTNESS
 struct DrawRaycast;
 impl EntityRenderCommand for DrawRaycast {
     type Param = SRes<GpuMesh>;
@@ -408,28 +463,13 @@ impl EntityRenderCommand for DrawRaycast {
     fn render<'w>(
         _view: Entity,
         item: Entity,
-        (meshes, mesh_query): SystemParamItem<'w, '_, Self::Param>,
+        meshes: SystemParamItem<'w, '_, Self::Param>,
         pass: &mut TrackedRenderPass<'w>,
     ) -> RenderCommandResult {
-        let mesh_handle = mesh_query.get(item).unwrap();
-        if let Some(gpu_mesh) = meshes.into_inner().get(mesh_handle) {
+            let gpu_mesh = meshes.into_inner();
             pass.set_vertex_buffer(0, gpu_mesh.vertex_buffer.slice(..));
-            match &gpu_mesh.buffer_info {
-                GpuBufferInfo::Indexed {
-                    buffer,
-                    index_format,
-                    count,
-                } => {
-                    pass.set_index_buffer(buffer.slice(..), 0, *index_format);
-                    pass.draw_indexed(0..count, 0, 0..1);
-                }
-                GpuBufferInfo::NonIndexed { vertex_count } => {
-                    pass.draw(0..vertex_count, 0..1);
-                }
-            }
+            pass.draw(0..gpu_mesh.vertex_count, 0..1);
+
             RenderCommandResult::Success
-        } else {
-            RenderCommandResult::Failure
-        }
     }
 }
